@@ -12,7 +12,8 @@ Paste into your browser console — no npm, no build, no setup.
 [![Platform](https://img.shields.io/badge/Platform-Browser-4caf50)](https://developer.mozilla.org/en-US/docs/Web/API/Window)
 [![OLX](https://img.shields.io/badge/OLX-Compatible-blueviolet)](https://www.olx.com.br)
 [![Dependencies](https://img.shields.io/badge/Dependencies-0-success)](package.json)
-[![Version](https://img.shields.io/badge/Version-1.0.0-informational)](https://github.com/YOUR_USER/olx-scraper/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/klimadev/olx-scraper)](https://github.com/klimadev/olx-scraper/releases)
+[![CI](https://github.com/klimadev/olx-scraper/actions/workflows/release.yml/badge.svg)](https://github.com/klimadev/olx-scraper/actions/workflows/release.yml)
 [![Made in](https://img.shields.io/badge/Made%20in-Brazil-green)](https://www.google.com/maps/place/Brazil)
 
 </div>
@@ -88,20 +89,54 @@ The script will:
 
 ## How It Works
 
+```mermaid
+flowchart TD
+    A(["OLX Grid Page<br/>(results list)"]) --> B["Extract Cards<br/>querySelectorAll section.olx-adcard"]
+    B --> C["Fetch Detail Pages<br/>XHR GET (batch: 5 at a time)"]
+    C --> D["Parse HTML Response"]
+    D --> E["Extract ld+json<br/>script type='application/ld+json'"]
+    D --> F["Parse dataLayer<br/>balanceJSON + window.dataLayer"]
+    E --> G["description<br/>(schema.org Product)"]
+    F --> H["adDetail + adProperties<br/>(page.*)"]
+    F --> I["Fix adDate<br/>(detail.adDate Unix seconds)"]
+    G --> J["Assemble Final JSON"]
+    H --> J
+    I --> J
+    J --> K["Output<br/>[{title, price, url, seller,<br/>location, img, adDetail,<br/>description, adProperties}]"]
+
+    style A fill:#e1f5fe,stroke:#0288d1
+    style K fill:#e8f5e9,stroke:#388e3c
+    style C fill:#fff3e0,stroke:#f57c00
+    style J fill:#f3e5f5,stroke:#7b1fa2
 ```
-┌─────────────────┐     ┌──────────────────┐     ┌──────────────────────┐
-│  OLX Grid Page  │────▶│  Extract Cards    │────▶│  Fetch Each Detail   │
-│  (results list)  │     │  (title, price,   │     │  via XHR (5 batches) │
-└─────────────────┘     │  url, seller, ...) │     └──────────┬───────────┘
-                        └──────────────────┘                │
-                                                             ▼
-┌─────────────────┐     ┌──────────────────┐     ┌──────────────────────┐
-│  Final JSON      │◀────│  Parse & Fix      │◀────│  Receive HTML +      │
-│  Output          │     │  • ld+json desc   │     │  Extract dataLayer   │
-└─────────────────┘     │  • adDetail JSON   │     └──────────────────────┘
-                        │  • adDate fix      │
-                        │  • adProperties    │
-                        └──────────────────┘
+
+### UML Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant Console as Browser Console
+    participant Grid as OLX Grid Page
+    participant Detail as OLX Detail Page (x N)
+    participant DL as dataLayer (embedded)
+    participant LD as ld+json (embedded)
+    participant Output as Final JSON
+
+    Console->>Grid: querySelectorAll('section.olx-adcard')
+    Grid-->>Console: Array of ad cards
+
+    loop Batch of 5
+        Console->>Detail: XHR GET detail URL
+        Detail-->>Console: Full HTML
+        Console->>DL: balanceJSON + JSON.parse
+        DL-->>Console: adDetail + adProperties
+        Console->>DL: detail.adDate * 1000
+        DL-->>Console: Correct Unix timestamp
+        Console->>LD: regex match ld+json
+        LD-->>Console: description text
+        Console->>Output: Assemble entry
+    end
+
+    Console-->>Output: console.log(JSON.stringify(results))
 ```
 
 ### Under the Hood
@@ -211,6 +246,6 @@ Distributed under the **MIT License**. See [LICENSE](LICENSE) for more informati
 
 **Made with ❤️ in Brazil** 🇧🇷
 
-[Report Bug](https://github.com/YOUR_USER/olx-scraper/issues) · [Request Feature](https://github.com/YOUR_USER/olx-scraper/issues)
+[Report Bug](https://github.com/klimadev/olx-scraper/issues) · [Request Feature](https://github.com/klimadev/olx-scraper/issues)
 
 </div>
