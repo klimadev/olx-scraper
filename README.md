@@ -33,8 +33,10 @@ Unlike traditional web scrapers that require Node.js, Puppeteer, or Playwright, 
 ## Features
 
 - **Zero dependencies** — no npm, no Docker, no Puppeteer. Just copy and paste.
+- **Class-based API** — use `OlxScraper.extract()` with optional `limit` and `minimal` mode.
 - **Works on any OLX category** — cars, real estate, computers, jobs, anything.
 - **Full data extraction** — captures title, price, URL, seller, location, image, plus the **complete `adDetail` JSON object**.
+- **Minimal mode** — get only the essentials: seller, location, date, title, URL, and description.
 - **Correct adDate** — OLX serializes dates incorrectly; this scraper fixes the epoch offset using the accurate timestamp from `dataLayer[0].page.detail.adDate`.
 - **Description parsing** — extracts descriptions from the schema.org `application/ld+json` block.
 - **Structured specs** — extracts the `adProperties` array, giving you every labeled attribute OLX stores for a listing.
@@ -53,18 +55,14 @@ Unlike traditional web scrapers that require Node.js, Puppeteer, or Playwright, 
 3. Copy the entire script from [`olx-scraper.js`](olx-scraper.js) and paste it into the console.
 4. Press `Enter`.
 
-The script will:
-1. Scrape all listing cards visible on the current grid page.
-2. Fetch each listing's detail page via XHR (5 at a time).
-3. Parse the embedded `dataLayer` JSON, `ld+json` description, and `adProperties`.
-4. Print the complete result as a JSON array.
+The script auto-executes and scrapes all visible listings. Once finished, a JSON array is printed to the console.
 
-```
+```json
 
 === RESULTADO FINAL ===
 [
   {
-    "title": "Computador i5-10400f, 16GB RAM, HD 1TB (sem placa de video)",
+    "title": "Computador i5-10400f, 16GB RAM, HD 1TB",
     "price": "R$ 1.400",
     "url": "https://sp.olx.com.br/sao-paulo/computador-i5-10400f-16gb-ram-hd-1tb-sem-placa-de-video-123456789",
     "seller": "João Silva",
@@ -74,16 +72,60 @@ The script will:
     "description": "Computador com processador Intel Core i5-10400F...",
     "adProperties": [
       { "label": "Processador", "value": "Intel Core i5-10400F" },
-      { "label": "Memória RAM", "value": "16 GB" },
-      ...
-    ]
-  },
-  ...
+      { "label": "Memória RAM", "value": "16 GB" }
+    ],
+    "adDate": "2025-10-28 14:30:00"
+  }
 ]
-
 ```
 
 > **Tip:** To save the output as a file, type `copy(JSON.stringify(results))` after the script finishes — this copies the full JSON array to your clipboard.
+
+---
+
+## API Reference
+
+The script exposes a global `OlxScraper` class. Call it again anytime with custom options:
+
+```js
+// Full output, no limit (same as default)
+OlxScraper.extract();
+
+// Limit to 10 listings
+OlxScraper.extract({ limit: 10 });
+
+// Minimal mode — only the essentials
+OlxScraper.extract({ minimal: true });
+
+// Combined
+OlxScraper.extract({ limit: 5, minimal: true });
+```
+
+### `OlxScraper.extract(options)`
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `limit` | `number` | `Infinity` | Maximum number of listings to return |
+| `minimal` | `boolean` | `false` | When `true`, return only `seller`, `location`, `adDate`, `title`, `url`, `description` |
+| `timeout` | `number` | `15000` | Per-request timeout in milliseconds |
+| `batchSize` | `number` | `5` | Number of concurrent detail-page fetches |
+
+### Minimal Mode
+
+When `minimal: true`, each entry contains **only** these fields:
+
+```json
+{
+  "seller": "João Silva",
+  "location": "São Paulo - SP",
+  "adDate": "2025-10-28 14:30:00",
+  "title": "Computador i5-10400f, 16GB RAM, HD 1TB",
+  "url": "https://sp.olx.com.br/sao-paulo/computador-i5-10400f-16gb-ram-hd-1tb-sem-placa-de-video-123456789",
+  "description": "Computador com processador Intel Core i5-10400F..."
+}
+```
+
+Use minimal mode when you only need the core listing data — perfect for quick checks, CSV export, or mobile views.
 
 ---
 
@@ -102,7 +144,7 @@ flowchart TD
     G --> J["Assemble Final JSON"]
     H --> J
     I --> J
-    J --> K["Output<br/>[{title, price, url, seller,<br/>location, img, adDetail,<br/>description, adProperties}]"]
+    J --> K["Output<br/>[{title, price, url, seller,<br/>location, img, adDetail,<br/>description, adProperties, adDate}]"]
 
     style A fill:#e1f5fe,stroke:#0288d1
     style K fill:#e8f5e9,stroke:#388e3c
@@ -123,8 +165,9 @@ sequenceDiagram
 
     Console->>Grid: querySelectorAll('section.olx-adcard')
     Grid-->>Console: Array of ad cards
+    Console->>Console: slice(0, limit) — cap if needed
 
-    loop Batch of 5
+    loop Batch of batchSize
         Console->>Detail: XHR GET detail URL
         Detail-->>Console: Full HTML
         Console->>DL: balanceJSON + JSON.parse
@@ -133,10 +176,12 @@ sequenceDiagram
         DL-->>Console: Correct Unix timestamp
         Console->>LD: regex match ld+json
         LD-->>Console: description text
-        Console->>Output: Assemble entry
+        Console->>Console: assembleEntry (minimal filter if true)
+        Console->>Output: Append to results
     end
 
     Console-->>Output: console.log(JSON.stringify(results))
+    Output-->>Console: Return JSON array
 ```
 
 ### Under the Hood
@@ -152,7 +197,7 @@ OLX embeds a full `dataLayer` object in every listing page that contains `page.a
 
 ## Output Schema
 
-Each entry in the result array has this structure:
+### Full Mode (default)
 
 | Field | Type | Source | Description |
 |---|---|---|---|
@@ -165,6 +210,18 @@ Each entry in the result array has this structure:
 | `adDetail` | `object` | `dataLayer[0].page.adDetail` | **Complete listing payload** — subject, price (number), category, region, phone, etc. |
 | `description` | `string` | `ld+json` | Long-form description text |
 | `adProperties` | `array` | `dataLayer[0].page.adProperties` | Structured spec list `[{label, value}]` |
+| `adDate` | `string` | `page.detail.adDate` (corrected) | Publication date `YYYY-MM-DD HH:mm:ss` |
+
+### Minimal Mode (`minimal: true`)
+
+| Field | Type | Source | Description |
+|---|---|---|---|
+| `seller` | `string` | Grid card | Seller name |
+| `location` | `string` | Grid card | City / state |
+| `adDate` | `string` | `page.detail.adDate` (corrected) | Publication date `YYYY-MM-DD HH:mm:ss` |
+| `title` | `string` | Grid card | Listing title |
+| `url` | `string` | Grid card | Canonical listing URL |
+| `description` | `string` | `ld+json` | Long-form description text |
 
 ### `adDetail` Fields
 
@@ -220,13 +277,16 @@ This script has been tested end-to-end on **live OLX listings** covering multipl
 A: Yes! OLX operates in dozens of countries (India, Portugal, Poland, etc.). The script targets OLX's core data layer, which is consistent across all regional instances.
 
 **Q: Can I export to CSV or Excel?**  
-A: After the script runs, use `console.table(results)` for a tabular view, or pipe the JSON through a converter like `jq` or an online CSV transformer.
+A: After the script runs, use `console.table(results)` for a tabular view, or pipe the JSON through a converter like `jq` or an online CSV transformer. For minimal mode, run `OlxScraper.extract({ minimal: true })` for a cleaner dataset.
 
 **Q: Does it work on mobile?**  
 A: The script is designed for desktop browsers. Mobile browser consoles are limited, but it may work with a mobile bookmarklet.
 
 **Q: Why does `adDate` show 1970 without the fix?**  
 A: OLX serializes `adDate` in `adDetail` using a wrong epoch multiplier. The script corrects this by reading the accurate Unix-second timestamp from `dataLayer[0].page.detail.adDate`.
+
+**Q: Can I run it multiple times with different options without re-pasting?**  
+A: Yes! After pasting once, just type `OlxScraper.extract({ limit: 5, minimal: true })` in the console. The class stays available.
 
 ---
 
