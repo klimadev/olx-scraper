@@ -88,17 +88,20 @@ The script auto-executes and scrapes all visible listings. Once finished, a JSON
 The script exposes a global `OlxScraper` class. Call it again anytime with custom options:
 
 ```js
-// Full output, no limit (same as default)
+// Full output, no limit, 10 pages (default)
 OlxScraper.extract();
 
-// Limit to 10 listings
+// Limit to 10 listings total
 OlxScraper.extract({ limit: 10 });
 
 // Minimal mode — only the essentials
 OlxScraper.extract({ minimal: true });
 
+// Scrape 5 pages starting from page 3
+OlxScraper.extract({ pages: 5, offset: 2 });
+
 // Combined
-OlxScraper.extract({ limit: 5, minimal: true });
+OlxScraper.extract({ pages: 3, limit: 50, minimal: true });
 ```
 
 ### `OlxScraper.extract(options)`
@@ -107,6 +110,8 @@ OlxScraper.extract({ limit: 5, minimal: true });
 |---|---|---|---|
 | `limit` | `number` | `Infinity` | Maximum number of listings to return |
 | `minimal` | `boolean` | `false` | When `true`, return only `seller`, `location`, `adDate`, `title`, `url`, `description` |
+| `pages` | `number` | `10` | Number of search result pages to scrape |
+| `offset` | `number` | `0` | Skip this many pages before starting (0 = start at page 1) |
 | `timeout` | `number` | `15000` | Per-request timeout in milliseconds |
 | `batchSize` | `number` | `5` | Number of concurrent detail-page fetches |
 
@@ -263,8 +268,7 @@ This script has been tested end-to-end on **live OLX listings** covering multipl
 
 ## Limitations
 
-- **One page at a time** — the script scrapes only the currently loaded grid page. Multi-page scraping is not yet implemented.
-- **No pagination** (yet) — you must manually navigate to subsequent pages and re-run the script.
+- **Single-session** — the script scrapes multiple grid pages in sequence but runs from a single browser tab. You do not need to manually navigate between pages.
 - **JavaScript required** — OLX is a single-page application; the script requires a browser environment with JavaScript enabled.
 - **Rate limiting** — OLX may throttle or block excessive requests. The 5-at-a-time batch processing helps, but use responsibly.
 - **Terms of Service** — review OLX's ToS before performing large-scale scraping. This tool is intended for personal, non-commercial use.

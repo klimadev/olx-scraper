@@ -1,51 +1,111 @@
-// == OLX Scraper v8 — Class-based with Minimal Mode & Limit ==
+// == OLX Scraper v9 — Multi-page, Minimal Mode & Limit ==
 // Paste on any OLX search results page.
 //
-// Usage:
-//   OlxScraper.extract()                                    — full output, no limit
-//   OlxScraper.extract({ limit: 10 })                       — max 10 listings
-//   OlxScraper.extract({ minimal: true })                   — only seller, location, date, title, url, description
-//   OlxScraper.extract({ limit: 5, minimal: true })         — combined
+// Quick start:
+//   OlxScraper.extract()                                          — 10 pages
+//   OlxScraper.extract({ limit: 5 })                              — max 5
+//   OlxScraper.extract({ minimal: true })                         — compact view
+//   OlxScraper.extract({ pages: 3, limit: 50, minimal: true })   — combined
+//   OlxScraper.help()                                             — show usage
 //
 // Output: JSON array of classified ads.
 
 class OlxScraper {
   /** Public version identifier */
-  static version = '0.2.0';
+  static version = '0.0.3';
+
+  /**
+   * Show usage instructions in the console.
+   *
+   * Call this after pasting the script to see all options, examples,
+   * and the output schema at a glance.
+   *
+   * @example
+   *   OlxScraper.help();
+   *
+   * @returns {void}
+   */
+  static help() {
+    const { version } = OlxScraper;
+    const examples = [
+      `OlxScraper v${version} — Uso rápido`,
+      '────────────────────────────────────────────────',
+      '',
+      '  OlxScraper.extract()',
+      '    → 10 páginas, sem limite, todos os campos',
+      '',
+      '  OlxScraper.extract({ limit: 5 })',
+      '    → máximo de 5 anúncios',
+      '',
+      '  OlxScraper.extract({ minimal: true })',
+      '    → só campos essenciais (inclui preço)',
+      '',
+      '  OlxScraper.extract({ pages: 3, offset: 2, limit: 50 })',
+      '    → páginas 3-5, máximo 50 anúncios',
+      '',
+      '  OlxScraper.help()',
+      '    → mostra esta ajuda',
+      '',
+      'Opções:',
+      '  pages   (number)  — qtd de páginas (default 10)',
+      '  offset  (number)  — página inicial -1 (default 0)',
+      '  limit   (number)  — max anúncios (default ilimitado)',
+      '  minimal (boolean) — só campos essenciais (default false)',
+      '  timeout (number)  — ms por requisição (default 15000)',
+      '  batchSize (number)— detalhes em paralelo (default 5)',
+      '',
+      'Campos retornados:',
+      '  title, price, url, seller, location, img,',
+      '  description, adDetail, adProperties, adDate',
+      '',
+      'Modo minimal (minimal: true):',
+      '  title, price, url, seller, location, description, adDate',
+      '',
+      'Dica: use console.table(resultado) para ver em tabela.',
+      '      use copy(JSON.stringify(resultado)) p/ copiar.',
+    ];
+    console.log(examples.join('\n'));
+  }
 
   // ── Public API ──────────────────────────────────────────────
 
-  /**
-   * Extract classified ads from the current OLX search results page.
-   *
-   * @param {Object}  [options]              - Optional configuration.
-   * @param {number}  [options.limit]        - Max listings to return (default: no limit).
-   * @param {boolean} [options.minimal=false] - Return only core fields.
-   * @param {number}  [options.timeout=15000] - Per-request timeout in ms.
-   * @param {number}  [options.batchSize=5]   - Concurrent detail fetches.
-   * @returns {Promise<Object[]>} Array of ad objects.
-   */
+   /**
+    * Extract classified ads from OLX search results.
+    * Scrapes multiple grid pages via XHR, then fetches each ad's detail page.
+    *
+    * @param {Object}  [options]               - Optional configuration.
+    * @param {number}  [options.limit]         - Max listings to return.
+    * @param {boolean} [options.minimal=false]  - Return only core fields.
+    * @param {number}  [options.pages=10]       - Number of grid pages to scrape.
+    * @param {number}  [options.offset=0]       - Starting page offset (0 = page 1).
+    * @param {number}  [options.timeout=15000]  - Per-request timeout in ms.
+    * @param {number}  [options.batchSize=5]    - Concurrent detail fetches.
+    * @returns {Promise<Object[]>} Array of ad objects.
+    */
   static async extract(options = {}) {
     const {
       limit = Infinity,
-      minimal = false,
+      minimal = true,
       timeout = 15000,
       batchSize = 5,
+      pages = 30,
+      offset = 0,
     } = options;
 
-    const cards = OlxScraper.#parseCards();
+    console.log(`[OLX Scraper] Coletando anúncios de ${pages} página(s) (offset: ${offset})...`);
 
-    if (cards.length === 0) {
-      console.warn('[OLX Scraper] Nenhum anúncio encontrado na página.');
+    const allCards = await OlxScraper.#collectCards({ pages, offset, timeout });
+
+    if (allCards.length === 0) {
+      console.warn('[OLX Scraper] Nenhum anúncio encontrado.');
       return [];
     }
 
-    console.log(`[OLX Scraper] Anúncios encontrados: ${cards.length}`);
+    console.log(`[OLX Scraper] Total de anúncios encontrados: ${allCards.length}`);
 
-    // Apply limit
     const sliced = Number.isFinite(limit)
-      ? cards.slice(0, limit)
-      : cards;
+      ? allCards.slice(0, limit)
+      : allCards;
 
     const results = await OlxScraper.#fetchDetails(sliced, {
       timeout,
@@ -97,6 +157,79 @@ class OlxScraper {
     if (!url) return null;
 
     return { title, price, url, seller, location, img };
+  }
+
+  // ── Multi-Page Collection ───────────────────────────────────
+
+  /**
+   * Build the URL for a given OLX search results page number.
+   * Starts from the current page URL and sets the `o` parameter.
+   * @param {number} pageNum - Page number (1-based).
+   * @returns {string} Absolute URL for that page.
+   */
+  static #buildPageUrl(pageNum) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('o', String(pageNum));
+    url.searchParams.delete('utm_source');
+    url.searchParams.delete('utm_campaign');
+    url.searchParams.delete('xtra');
+    return url.toString();
+  }
+
+  /**
+   * Collect ad cards from multiple grid pages.
+   * Page 1 (when offset is 0) uses the live DOM; all others use XHR.
+   * @param {{ pages: number, offset: number, timeout: number }} config
+   * @returns {Promise<Object[]>} Flattened array of card objects.
+   */
+  static async #collectCards({ pages, offset, timeout }) {
+    const allCards = [];
+    const startPage = offset + 1;
+
+    for (let i = 0; i < pages; i++) {
+      const pageNum = startPage + i;
+      let cards;
+
+      if (pageNum === 1 && offset === 0) {
+        cards = OlxScraper.#parseCards();
+      } else {
+        const url = OlxScraper.#buildPageUrl(pageNum);
+        try {
+          cards = await OlxScraper.#fetchGridPage(url, timeout);
+        } catch (err) {
+          console.warn(`[OLX Scraper] Erro ao buscar página ${pageNum}: ${err.message}`);
+          break;
+        }
+      }
+
+      if (cards.length === 0) break;
+      allCards.push(...cards);
+      console.log(`[OLX Scraper] Página ${pageNum}: ${cards.length} anúncios`);
+    }
+
+    return allCards;
+  }
+
+  /**
+   * Fetch a grid/search results page via XHR and parse its cards.
+   * @param {string} url - Grid page URL.
+   * @param {number} ms  - Timeout in milliseconds.
+   * @returns {Promise<Object[]>} Parsed card objects.
+   */
+  static async #fetchGridPage(url, ms) {
+    const html = await OlxScraper.#fetchWithTimeout(url, ms);
+    return OlxScraper.#parseCardsFromHtml(html);
+  }
+
+  /**
+   * Parse ad cards from an HTML string (XHR response).
+   * @param {string} html - Raw HTML of a grid page.
+   * @returns {Object[]} Array of card data objects.
+   */
+  static #parseCardsFromHtml(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const cards = doc.querySelectorAll('section.olx-adcard');
+    return Array.from(cards, OlxScraper.#parseCard).filter(Boolean);
   }
 
   // ── Detail Page Parsing ─────────────────────────────────────
@@ -215,24 +348,34 @@ class OlxScraper {
   /**
    * Merge card-level grid data with detail-page data.
    *
-   * In **minimal** mode only the core fields (seller, location, adDate,
-   * title, url, description) are returned — `price`, `img`, `adDetail`,
-   * and `adProperties` are omitted.
+   * In **minimal** mode the heavier fields (`img`, `adDetail`,
+   * `adProperties`) are omitted, but `price` is always included.
    *
    * @param {Object}  ad      - Card data from #parseCard.
+   *   @param {string}  ad.title
+   *   @param {string}  ad.price
+   *   @param {string}  ad.url
+   *   @param {string}  ad.seller
+   *   @param {string}  ad.location
+   *   @param {string}  ad.img
    * @param {Object}  detail  - Detail data from #extractAll.
-   * @param {boolean} minimal - When true, return only essential fields.
+   *   @param {Object|null}  detail.adDetail
+   *   @param {string|null}  detail.description
+   *   @param {Array|null}   detail.adProperties
+   *   @param {string|null}  detail.adDate
+   * @param {boolean} minimal - When true, omit img / adDetail / adProperties.
    * @returns {Object} Merged entry.
    */
   static #assembleEntry(ad, detail, minimal) {
     if (minimal) {
       return {
+        title: ad.title,
+        price: ad.price,
+        url: ad.url,
         seller: ad.seller,
         location: ad.location,
-        adDate: detail.adDate,
-        title: ad.title,
-        url: ad.url,
         description: detail.description,
+        adDate: detail.adDate,
       };
     }
 
@@ -243,10 +386,10 @@ class OlxScraper {
       seller: ad.seller,
       location: ad.location,
       img: ad.img,
-      adDetail: detail.adDetail,
       description: detail.description,
-      adProperties: detail.adProperties,
       adDate: detail.adDate,
+      adDetail: detail.adDetail,
+      adProperties: detail.adProperties,
     };
   }
 
@@ -300,10 +443,11 @@ class OlxScraper {
             .catch((err) => {
               if (minimal) {
                 return {
+                  title: ad.title,
+                  price: ad.price,
+                  url: ad.url,
                   seller: ad.seller,
                   location: ad.location,
-                  title: ad.title,
-                  url: ad.url,
                   _error: err.message,
                 };
               }
@@ -325,12 +469,3 @@ class OlxScraper {
 // ── Export (browser global) ───────────────────────────────────
 globalThis.OlxScraper = OlxScraper;
 
-// Auto-execute for paste-and-run backward compatibility.
-// Call OlxScraper.extract() manually for custom options.
-(async () => {
-  try {
-    await OlxScraper.extract();
-  } catch (err) {
-    console.error('[OLX Scraper] Fatal error:', err);
-  }
-})();
