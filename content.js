@@ -4,6 +4,22 @@
 class OlxScraper {
   static version = '0.1.0';
 
+  // ── Aguardar cards aparecerem no DOM (SPA) ─────────────
+  // OLX renderiza os cards via JS. Se dispararmos a extração antes da
+  // renderização, achamos 0 cards. Fazemos poll do DOM até aparecerem.
+  static #waitForCards(timeout = 15000) {
+    return new Promise((resolve) => {
+      const t0 = Date.now();
+      const check = () => {
+        const found = document.querySelectorAll('section.olx-adcard');
+        if (found.length) return resolve(found.length);
+        if (Date.now() - t0 > timeout) return resolve(0);
+        requestAnimationFrame(check);
+      };
+      check();
+    });
+  }
+
   // ── Parse de cards da página atual ──────────────────────
   static #parseCards() {
     const cards = document.querySelectorAll('section.olx-adcard');
@@ -235,6 +251,10 @@ Opções:
     };
 
     console.log(`[OLX Scraper] Iniciando extração — páginas: ${config.pages}, limite: ${config.limit > 1e8 ? 'ilimitado' : config.limit}, minimal: ${config.minimal}`);
+
+    // 0. Aguardar os cards renderizarem (OLX é SPA)
+    const waited = await this.#waitForCards(config.timeout);
+    console.log(`[OLX Scraper] Cards aguardados: ${waited}`);
 
     // 1. Coletar cards
     const cards = await this.#collectCards(config);
