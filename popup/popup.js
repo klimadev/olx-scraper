@@ -136,17 +136,30 @@ async function checkIsOlx() {
   }
 }
 
-// ── Connect & start scraping ─────────────────────────────
-function startScraping(options) {
+// ── Connect & sync state with background ───────────────
+// O scraping vive no background; o popup apenas se conecta como viewer.
+// Se o popup fechar e reabrir, ele reconecta e vê o progresso atual.
+function connectPort() {
   port = chrome.runtime.connect({ name: 'scrape' });
 
   port.onMessage.addListener((msg) => {
     switch (msg.type) {
-      case 'progress':
-        updateProgress(msg.done, msg.total);
+      case 'update':
+        // Snapshot do estado (sem results). Sincroniza a UI.
+        syncUIFromState(msg.state);
         break;
       case 'complete':
-        onComplete(msg.results, msg.count);
+        // Background envia results completos quando completa (ou ao reconectar).
+        lastResults = msg.results;
+        showComplete(msg.count);
+        break;
+      case 'stateSnapshot':
+        // Popup pediu snapshot completo (ex: após reconectar para download).
+        if (msg.state.results) {
+          lastResults = msg.state.results;
+          showComplete(msg.state.results.length);
+        }
+        syncUIFromState(msg.state);
         break;
       case 'error':
         onError(msg.message);
@@ -154,13 +167,26 @@ function startScraping(options) {
     }
   });
 
-  port.onDisconnect.addListener(() => {
-    port = null;
-    if (currentState === STATE.SCRAPING) {
-      onError('Conexão perdida. Tente novamente.');
-    }
-  });
+  port.onDisconnect.addListener(() => { port = null; });
+}
 
+function syncUIFromState(s) {
+  if (!s) return;
+  if (s.status === 'scraping') {
+    updateProgress(s.done, s.total);
+    setUIState(STATE.SCRAPING);
+  } else if (s.status === 'complete') {
+    if (s.done) updateProgress(s.done, s.total || s.done);
+    // results não vêm no update; se já temos lastResults, mostra.
+    if (lastResults) showComplete(lastResults.length);
+    else setUIState(STATE.COMPLETE);
+  } else if (s.status === 'error') {
+    onError(s.error);
+  }
+}
+
+function startScraping(options) {
+  if (!port) connectPort();
   port.postMessage({ type: 'start', options });
   setUIState(STATE.SCRAPING);
 }
@@ -173,13 +199,13 @@ function updateProgress(done, total) {
 }
 
 // ── Complete ─────────────────────────────────────────────
-function onComplete(results, count) {
-  lastResults = results;
+function showComplete(count) {
+  if (!lastResults) { setUIState(STATE.COMPLETE); return; }
   resultCount.textContent = `${count} anúncio${count !== 1 ? 's' : ''} extraído${count !== 1 ? 's' : ''}`;
 
   // Preview: primeiros 5
   previewBody.innerHTML = '';
-  const preview = results.slice(0, 5);
+  const preview = lastResults.slice(0, 5);
   preview.forEach(ad => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -210,7 +236,8 @@ function onError(msg) {
 
 // ── Download ─────────────────────────────────────────────
 function downloadResults() {
-  if (!lastResults || !port) return;
+  if (!lastResults) return;
+  if (!port) connectPort();
   port.postMessage({ type: 'download', results: lastResults });
 }
 
@@ -259,6 +286,9 @@ btnCopy.addEventListener('click', copyResults);
 // ── Init ─────────────────────────────────────────────────
 (async function init() {
   loadSettings();
+  // Conecta ao background PRIMEIRO, para receber o estado atual do
+  // scraping (pode estar rodando em background mesmo com popup fechado).
+  connectPort();
   const onOlx = await checkIsOlx();
   if (onOlx) setUIState(STATE.IDLE);
 })();

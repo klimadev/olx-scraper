@@ -1,7 +1,34 @@
 // == OLX Scraper — Background Service Worker (MV3) ==
+// O estado do scraping vive AQUI (no service worker), não no popup.
+// O popup é apenas um viewer: abre, vê o progresso, fecha — o scraping
+// continua rodando mesmo com o popup fechado.
 
-/** Mapa de portas do popup conectadas: tabId → chrome.runtime.Port */
-const popupPorts = new Map();
+// ── Estado global do scraping ────────────────────────────
+// status: 'idle' | 'scraping' | 'complete' | 'error'
+const state = {
+  status: 'idle',
+  done: 0,
+  total: 0,
+  results: null,
+  error: null,
+  activeTabId: null,
+};
+
+/** Portas conectadas do popup (para broadcast de updates). */
+const popupPorts = new Set();
+
+function broadcastUpdate() {
+  const snapshot = { type: 'update', state: { ...state, results: undefined } };
+  // Não enviamos results no update (pode ser grande). Popup pede via getState.
+  for (const port of popupPorts) {
+    try { port.postMessage(snapshot); } catch {}
+  }
+}
+
+function setState(patch) {
+  Object.assign(state, patch);
+  broadcastUpdate();
+}
 
 // ── Helper: injetar content.js sob demanda ──
 async function ensureContentScript(tabId) {
@@ -18,18 +45,13 @@ async function ensureContentScript(tabId) {
 }
 
 // ── Helper: enviar 'start' com retry ──
-// Injeta o content script (se necessário) e envia a mensagem. Se o
-// content script não responder (lastError), re-injeta e tenta de novo.
 function sendStartWithRetry(tabId, options, attempts = 3) {
   return new Promise((resolve) => {
-    const trySend = async (left) => {
-      // Garante que o content script está injetado antes de cada tentativa
-      // que seja um retry. A 1ª tentativa assume que já injetamos antes.
-      chrome.tabs.sendMessage(tabId, { type: 'start', options }, (response) => {
+    const trySend = (left) => {
+      chrome.tabs.sendMessage(tabId, { type: 'start', options }, () => {
         if (chrome.runtime.lastError) {
           console.warn('[OLX Scraper] sendMessage falhou:', chrome.runtime.lastError.message);
           if (left > 0) {
-            // Re-injeta e tenta de novo após pequeno delay
             ensureContentScript(tabId).then(() =>
               setTimeout(() => trySend(left - 1), 150)
             );
@@ -45,50 +67,52 @@ function sendStartWithRetry(tabId, options, attempts = 3) {
   });
 }
 
+// ── Descobrir aba ativa (janela do navegador, não do popup) ──
+async function getActiveTab() {
+  let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tabs.length) tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tabs[0] || null;
+}
+
 // ── Conexão do popup ─────────────────────────────────────
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'scrape') return;
+  popupPorts.add(port);
 
-  const portState = { tabId: null };
+  // Envia o estado atual assim que o popup abre (re-conexão).
+  port.postMessage({ type: 'update', state: { ...state, results: undefined } });
 
-  const resolveTabId = async () => {
-    if (portState.tabId) return portState.tabId;
-    // lastFocusedWindow: janela focada ANTES do popup abrir (a janela do
-    // navegador, não a janela do popup). Em alguns navegadores o popup não
-    // conta como janela separada, então caímos de volta para currentWindow.
-    let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (!tabs.length) tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tabs[0]) {
-      portState.tabId = tabs[0].id;
-      popupPorts.set(portState.tabId, port);
-    }
-    return portState.tabId;
-  };
+  // Se já completou, manda os results também.
+  if (state.status === 'complete' && state.results) {
+    port.postMessage({ type: 'complete', results: state.results, count: state.results.length });
+  }
 
   port.onMessage.addListener(async (msg) => {
-    const tabId = await resolveTabId();
-    if (!tabId) {
-      port.postMessage({ type: 'error', message: 'Nenhuma aba ativa encontrada.' });
-      return;
-    }
-
     if (msg.type === 'start') {
-      // Injeta o content script sob demanda e tenta enviar a mensagem
-      // com retry. Garante funcionamento em páginas já abertas.
-      const injected = await ensureContentScript(tabId);
-      if (!injected) {
-        port.postMessage({
-          type: 'error',
-          message: 'Não foi possível injetar o script. Navegue para uma página do OLX e tente novamente.',
-        });
+      const tab = await getActiveTab();
+      if (!tab?.id) {
+        setState({ status: 'error', error: 'Nenhuma aba ativa encontrada.' });
         return;
       }
-      const sent = await sendStartWithRetry(tabId, msg.options);
+
+      // Reset do estado
+      setState({
+        status: 'scraping',
+        done: 0,
+        total: 0,
+        results: null,
+        error: null,
+        activeTabId: tab.id,
+      });
+
+      const injected = await ensureContentScript(tab.id);
+      if (!injected) {
+        setState({ status: 'error', error: 'Não foi possível injetar o script. Navegue para uma página do OLX.' });
+        return;
+      }
+      const sent = await sendStartWithRetry(tab.id, msg.options);
       if (!sent) {
-        port.postMessage({
-          type: 'error',
-          message: 'Content script não respondeu. Recarregue a página do OLX e tente novamente.',
-        });
+        setState({ status: 'error', error: 'Content script não respondeu. Recarregue a página do OLX.' });
       }
     }
 
@@ -97,22 +121,24 @@ chrome.runtime.onConnect.addListener((port) => {
         const blob = new Blob([JSON.stringify(msg.results, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const filename = `olx-scraper-${Date.now()}.json`;
-
-        await chrome.downloads.download({
-          url,
-          filename,
-          conflictAction: 'uniquify',
-        });
-
+        await chrome.downloads.download({ url, filename, conflictAction: 'uniquify' });
         setTimeout(() => URL.revokeObjectURL(url), 10000);
       } catch (err) {
         port.postMessage({ type: 'error', message: `Falha ao baixar: ${err.message}` });
       }
     }
+
+    if (msg.type === 'getState') {
+      // Popup pede results completos (ex: para download/copy após reconexão)
+      port.postMessage({
+        type: 'stateSnapshot',
+        state: { ...state },
+      });
+    }
   });
 
   port.onDisconnect.addListener(() => {
-    if (portState.tabId) popupPorts.delete(portState.tabId);
+    popupPorts.delete(port);
   });
 });
 
@@ -120,13 +146,16 @@ chrome.runtime.onConnect.addListener((port) => {
 chrome.runtime.onMessage.addListener((msg, sender) => {
   if (!sender.tab) return;
 
-  const port = popupPorts.get(sender.tab.id);
-
   if (msg.type === 'progress') {
-    if (port) port.postMessage({ type: 'progress', done: msg.done, total: msg.total });
+    setState({ done: msg.done, total: msg.total });
   } else if (msg.type === 'complete') {
-    if (port) port.postMessage({ type: 'complete', results: msg.results, count: msg.count });
+    setState({
+      status: 'complete',
+      results: msg.results,
+      done: msg.count,
+      total: msg.count,
+    });
   } else if (msg.type === 'error') {
-    if (port) port.postMessage({ type: 'error', message: msg.message });
+    setState({ status: 'error', error: msg.message });
   }
 });
