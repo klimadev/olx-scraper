@@ -6,34 +6,39 @@ class OlxScraper {
 
   // ── Parse de cards da página atual ──────────────────────
   static #parseCards() {
-    const cards = document.querySelectorAll('section.section_OLXAdCard');
-    if (!cards.length) {
-      console.warn('[OLX Scraper] Nenhum card encontrado com section.section_OLXAdCard');
-    }
-    return Array.from(cards).map(el => this.#parseCard(el));
+    const cards = document.querySelectorAll('section.olx-adcard');
+    return Array.from(cards, this.#parseCard).filter(Boolean);
   }
 
   static #parseCard(el) {
-    const titleEl = el.querySelector('a');
-    const priceEl = el.querySelector('p[data-testid="ad-price"]');
-    const sellerEl = el.querySelector('p[data-testid="ad-seller"]');
-    const locationEl = el.querySelector('p[data-testid="ad-location"]');
-    const imgEl = el.querySelector('img');
-    return {
-      title: titleEl?.title ?? titleEl?.innerText?.trim() ?? '',
-      url: titleEl?.href ?? '',
-      price: priceEl?.innerText?.trim() ?? '',
-      seller: sellerEl?.innerText?.trim() ?? '',
-      location: locationEl?.innerText?.trim() ?? '',
-      img: imgEl?.src ?? '',
-    };
+    const title =
+      el.querySelector('h2.olx-adcard__title')?.textContent?.trim() ?? '';
+    const price =
+      el.querySelector('h3.olx-adcard__price')?.textContent?.trim() ?? '';
+    const rawUrl =
+      el.querySelector('a.olx-adcard__link')?.href ?? '';
+    const seller =
+      el.querySelector(
+        'span[class*="TransactionalSellerRating_transactionalSellerName"]'
+      )?.textContent?.trim() ?? '';
+    const location =
+      el.querySelector('p.olx-adcard__location')?.textContent?.trim() ?? '';
+    const rawImg =
+      el.querySelector('.olx-adcard__media img')?.src ?? '';
+
+    const url = rawUrl.split('?')[0];
+    const img = rawImg.split('?')[0];
+
+    if (!url) return null;
+
+    return { title, price, url, seller, location, img };
   }
 
   // ── Parse de cards a partir de HTML (páginas 2+) ───────
   static #parseCardsFromHtml(html) {
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    const cards = doc.querySelectorAll('section.section_OLXAdCard');
-    return Array.from(cards).map(el => this.#parseCard(el));
+    const cards = doc.querySelectorAll('section.olx-adcard');
+    return Array.from(cards, this.#parseCard).filter(Boolean);
   }
 
   // ── URL builder ────────────────────────────────────────
@@ -255,22 +260,31 @@ Opções:
 }
 
 // ── Message Listener ─────────────────────────────────────
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type === 'start') {
-    OlxScraper.extract(msg.options)
-      .then(results => {
-        chrome.runtime.sendMessage({
-          type: 'complete',
-          results,
-          count: results.length,
+// Guarda contra re-injeção (chrome.scripting pode injetar múltiplas vezes).
+if (!globalThis.__olxScraperListenerRegistered) {
+  globalThis.__olxScraperListenerRegistered = true;
+
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.type === 'start') {
+      OlxScraper.extract(msg.options)
+        .then(results => {
+          chrome.runtime.sendMessage({
+            type: 'complete',
+            results,
+            count: results.length,
+          });
+        })
+        .catch(err => {
+          chrome.runtime.sendMessage({
+            type: 'error',
+            message: err.message || 'Erro desconhecido durante extração',
+          });
         });
-      })
-      .catch(err => {
-        chrome.runtime.sendMessage({
-          type: 'error',
-          message: err.message || 'Erro desconhecido durante extração',
-        });
-      });
-    return true; // keep channel open for async
-  }
-});
+      sendResponse({ ok: true }); // confirma que o listener está vivo
+      return true; // keep channel open for async
+    }
+  });
+
+  console.log('[OLX Scraper] Content script carregado v' + OlxScraper.version);
+}
+

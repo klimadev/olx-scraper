@@ -12,12 +12,6 @@
   "host_permissions": [
     "*://*.olx.com.br/*"
   ],
-  "content_scripts": [
-    {
-      "matches": ["*://*.olx.com.br/*"],
-      "js": ["content.js"]
-    }
-  ],
   "background": {
     "service_worker": "background.js"
   },

@@ -3,11 +3,8 @@
 /** Mapa de portas do popup conectadas: tabId → chrome.runtime.Port */
 const popupPorts = new Map();
 
-// ── Helper: injetar content.js sob demanda (com retry) ──
+// ── Helper: injetar content.js sob demanda ──
 async function ensureContentScript(tabId) {
-  // Tenta injetar o content script. Se já estiver presente, a reexecução
-  // apenas rebinda os listeners无害mente. Isso garante funcionamento em
-  // abas abertas antes da instalação da extensão.
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -20,6 +17,34 @@ async function ensureContentScript(tabId) {
   }
 }
 
+// ── Helper: enviar 'start' com retry ──
+// Injeta o content script (se necessário) e envia a mensagem. Se o
+// content script não responder (lastError), re-injeta e tenta de novo.
+function sendStartWithRetry(tabId, options, attempts = 3) {
+  return new Promise((resolve) => {
+    const trySend = async (left) => {
+      // Garante que o content script está injetado antes de cada tentativa
+      // que seja um retry. A 1ª tentativa assume que já injetamos antes.
+      chrome.tabs.sendMessage(tabId, { type: 'start', options }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.warn('[OLX Scraper] sendMessage falhou:', chrome.runtime.lastError.message);
+          if (left > 0) {
+            // Re-injeta e tenta de novo após pequeno delay
+            ensureContentScript(tabId).then(() =>
+              setTimeout(() => trySend(left - 1), 150)
+            );
+          } else {
+            resolve(false);
+          }
+        } else {
+          resolve(true);
+        }
+      });
+    };
+    trySend(attempts);
+  });
+}
+
 // ── Conexão do popup ─────────────────────────────────────
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'scrape') return;
@@ -28,7 +53,11 @@ chrome.runtime.onConnect.addListener((port) => {
 
   const resolveTabId = async () => {
     if (portState.tabId) return portState.tabId;
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    // lastFocusedWindow: janela focada ANTES do popup abrir (a janela do
+    // navegador, não a janela do popup). Em alguns navegadores o popup não
+    // conta como janela separada, então caímos de volta para currentWindow.
+    let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tabs.length) tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tabs[0]) {
       portState.tabId = tabs[0].id;
       popupPorts.set(portState.tabId, port);
@@ -44,8 +73,8 @@ chrome.runtime.onConnect.addListener((port) => {
     }
 
     if (msg.type === 'start') {
-      // Injeta o content script sob demanda (garante funcionamento em
-      // páginas já abertas antes da instalação da extensão).
+      // Injeta o content script sob demanda e tenta enviar a mensagem
+      // com retry. Garante funcionamento em páginas já abertas.
       const injected = await ensureContentScript(tabId);
       if (!injected) {
         port.postMessage({
@@ -54,24 +83,11 @@ chrome.runtime.onConnect.addListener((port) => {
         });
         return;
       }
-
-      // Pequeno delay para garantir que os listeners do content script
-      // estejam registrados antes de enviar a mensagem.
-      await new Promise(r => setTimeout(r, 100));
-
-      try {
-        chrome.tabs.sendMessage(tabId, { type: 'start', options: msg.options }, () => {
-          if (chrome.runtime.lastError) {
-            port.postMessage({
-              type: 'error',
-              message: 'Content script não respondeu. Recarregue a página do OLX e tente novamente.',
-            });
-          }
-        });
-      } catch (err) {
+      const sent = await sendStartWithRetry(tabId, msg.options);
+      if (!sent) {
         port.postMessage({
           type: 'error',
-          message: 'Content script não disponível. Navegue para uma página do OLX e tente novamente.',
+          message: 'Content script não respondeu. Recarregue a página do OLX e tente novamente.',
         });
       }
     }
