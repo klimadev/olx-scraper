@@ -4,7 +4,7 @@
 
 **Self-contained, zero-dependency classifieds scraper for OLX**
 
-Paste into your browser console — no npm, no build, no setup.
+Duas formas de usar: **extensão Chrome** (Manifest V3) ou **console do navegador**.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![JavaScript](https://img.shields.io/badge/JavaScript-ES6+-yellow)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
@@ -43,6 +43,30 @@ Unlike traditional web scrapers that require Node.js, Puppeteer, or Playwright, 
 - **Batch processing** — fetches detail pages 5 at a time to avoid overwhelming the browser.
 - **Cross-subdomain** — works seamlessly across all regional OLX subdomains thanks to OLX's permissive CORS policy.
 - **Human-readable output** — prints a formatted JSON array to the console, ready for copy-paste or further processing.
+
+---
+
+## 🧩 Extensão Chrome (Manifest V3)
+
+Também disponível como uma extensão Chrome moderna com interface gráfica.
+
+### Instalação (Modo Desenvolvedor)
+
+1. Clone o repositório ou baixe os arquivos
+2. Abra `chrome://extensions` no Chrome
+3. Ative **Modo do desenvolvedor** (canto superior direito)
+4. Clique **Carregar sem compactação** e selecione a pasta do projeto
+5. O ícone da extensão aparecerá na barra de ferramentas
+
+### Como usar
+
+1. Navegue até qualquer página de busca do OLX (ex.: [carros usados](https://www.olx.com.br/autos-e-pecas/carros-vans-e-utilitarios))
+2. Clique no ícone da extensão na barra de ferramentas
+3. Ajuste as opções (páginas, limite, modo mínimo, etc.)
+4. Clique **Extrair** — a barra de progresso mostra o andamento
+5. Ao finalizar, clique **Download JSON** para salvar o resultado
+
+> A extensão **não substitui** o uso via console. O script `olx-scraper.js` original continua funcionando para colar diretamente no console.
 
 ---
 

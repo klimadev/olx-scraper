@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "OLX Scraper",
+  "version": "0.1.0",
+  "description": "Extrai anúncios do OLX com opções configuráveis",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "downloads"
+  ],
+  "host_permissions": [
+    "*://*.olx.com.br/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["*://*.olx.com.br/*"],
+      "js": ["content.js"]
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "OLX Scraper",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

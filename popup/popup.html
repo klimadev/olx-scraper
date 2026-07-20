@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OLX Scraper</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <div class="header">
+      <h1>OLX Scraper</h1>
+      <span class="version">v0.1.0</span>
+    </div>
+
+    <!-- Error: not on OLX -->
+    <div id="not-olx" class="state-msg hidden">
+      <span class="icon">⚠️</span>
+      <p>Navegue para uma página de busca do OLX para usar a extensão.</p>
+    </div>
+
+    <!-- === STATE: IDLE (formulário) === -->
+    <div id="state-idle" class="state">
+      <form id="scrape-form">
+        <div class="form-row">
+          <div class="field">
+            <label for="pages">Páginas</label>
+            <input type="number" id="pages" min="1" max="100" value="10">
+          </div>
+          <div class="field">
+            <label for="offset">Offset</label>
+            <input type="number" id="offset" min="0" max="100" value="0">
+          </div>
+          <div class="field">
+            <label for="limit">Limite</label>
+            <input type="number" id="limit" min="0" placeholder="ilimitado">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="field">
+            <label for="batchSize">Lote</label>
+            <input type="number" id="batchSize" min="1" max="20" value="5">
+          </div>
+          <div class="field">
+            <label for="timeout">Timeout (ms)</label>
+            <input type="number" id="timeout" min="1000" max="120000" value="15000">
+          </div>
+          <div class="field checkbox-field">
+            <label>
+              <input type="checkbox" id="minimal" checked>
+              Modo mínimo
+            </label>
+          </div>
+        </div>
+
+        <div class="error-msg hidden" id="form-error"></div>
+        <button type="submit" id="btn-extract" class="btn-primary">Extrair</button>
+      </form>
+    </div>
+
+    <!-- === STATE: SCRAPING (progresso) === -->
+    <div id="state-scraping" class="state hidden">
+      <div class="progress-section">
+        <div class="spinner"></div>
+        <p class="progress-text">Extraindo anúncios...</p>
+        <div class="progress-bar-wrapper">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+        <p class="progress-count" id="progress-count">0 / 0</p>
+      </div>
+    </div>
+
+    <!-- === STATE: COMPLETE (resultados) === -->
+    <div id="state-complete" class="state hidden">
+      <div class="result-section">
+        <div class="result-header">
+          <span class="icon">✅</span>
+          <p class="result-count" id="result-count">0 anúncios extraídos</p>
+        </div>
+        <div class="result-actions">
+          <button id="btn-download" class="btn-primary">Download JSON</button>
+          <button id="btn-copy" class="btn-secondary">Copiar</button>
+          <button id="btn-new" class="btn-link">Nova extração</button>
+        </div>
+        <p class="copy-feedback hidden" id="copy-feedback">Copiado!</p>
+        <div class="preview" id="preview">
+          <table>
+            <thead>
+              <tr>
+                <th>Título</th>
+                <th>Preço</th>
+                <th>Local</th>
+              </tr>
+            </thead>
+            <tbody id="preview-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- === STATE: ERROR === -->
+    <div id="state-error" class="state hidden">
+      <div class="error-section">
+        <span class="icon">❌</span>
+        <p class="error-text" id="error-message">Erro desconhecido.</p>
+        <button id="btn-retry" class="btn-primary">Tentar novamente</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
