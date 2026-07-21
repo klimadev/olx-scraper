@@ -25,23 +25,19 @@
       <form id="scrape-form">
         <div class="form-row">
           <div class="field">
-            <label for="pages">Páginas</label>
-            <input type="number" id="pages" min="1" max="100" value="10">
+            <label for="goal">Objetivo</label>
+            <input type="number" id="goal" min="1" placeholder="ilimitado" value="500">
           </div>
           <div class="field">
             <label for="offset">Offset</label>
-            <input type="number" id="offset" min="0" max="100" value="0">
-          </div>
-          <div class="field">
-            <label for="limit">Limite</label>
-            <input type="number" id="limit" min="0" placeholder="ilimitado">
+            <input type="number" id="offset" min="0" value="0">
           </div>
         </div>
 
         <div class="form-row">
           <div class="field">
             <label for="batchSize">Lote</label>
-            <input type="number" id="batchSize" min="1" max="20" value="5">
+            <input type="number" id="batchSize" min="1" value="20" data-default="20">
           </div>
           <div class="field">
             <label for="timeout">Timeout (ms)</label>
@@ -58,6 +54,11 @@
         <div class="error-msg hidden" id="form-error"></div>
         <button type="submit" id="btn-extract" class="btn-primary">Extrair</button>
       </form>
+
+      <details class="history-panel">
+        <summary>Histórico</summary>
+        <div id="history-list" class="history-list"></div>
+      </details>
     </div>
 
     <!-- === STATE: SCRAPING (progresso) === -->

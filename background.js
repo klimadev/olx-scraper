@@ -7,6 +7,9 @@
 // status: 'idle' | 'scraping' | 'complete' | 'error'
 const state = {
   status: 'idle',
+  phase: null, // null | 'collect' | 'details'
+  goal: Infinity,
+  minimal: true,
   done: 0,
   total: 0,
   results: null,
@@ -98,6 +101,9 @@ chrome.runtime.onConnect.addListener((port) => {
       // Reset do estado
       setState({
         status: 'scraping',
+        phase: 'collect',
+        goal: msg.options?.goal ?? Infinity,
+        minimal: msg.options?.minimal ?? true,
         done: 0,
         total: 0,
         results: null,
@@ -135,6 +141,20 @@ chrome.runtime.onConnect.addListener((port) => {
         state: { ...state },
       });
     }
+
+    if (msg.type === 'getHistory') {
+      chrome.storage.local.get(HISTORY_KEY, (d) => {
+        port.postMessage({ type: 'historyList', list: d[HISTORY_KEY] || [] });
+      });
+    }
+
+    if (msg.type === 'deleteHistory') {
+      chrome.storage.local.get(HISTORY_KEY, async (d) => {
+        const list = (d[HISTORY_KEY] || []).filter((e) => e.id !== msg.id);
+        await chrome.storage.local.set({ [HISTORY_KEY]: list });
+        port.postMessage({ type: 'historyList', list });
+      });
+    }
   });
 
   port.onDisconnect.addListener(() => {
@@ -142,19 +162,41 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
+// ── Histórico de extrações (persistido em chrome.storage.local) ──
+const HISTORY_KEY = 'olxHistory';
+const HISTORY_CAP = 50;
+
+async function saveHistoryEntry(count, goal, results) {
+  const { [HISTORY_KEY]: list = [] } = await chrome.storage.local.get(HISTORY_KEY);
+  list.unshift({
+    id: Date.now().toString(),
+    ts: Date.now(),
+    goal,
+    count,
+    minimal: state.minimal,
+    results,
+  });
+  while (list.length > HISTORY_CAP) list.pop();
+  await chrome.storage.local.set({ [HISTORY_KEY]: list });
+}
+
 // ── Mensagens do content script ──────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender) => {
   if (!sender.tab) return;
 
-  if (msg.type === 'progress') {
-    setState({ done: msg.done, total: msg.total });
+  if (msg.type === 'collectprogress') {
+    setState({ phase: 'collect', done: msg.done, total: msg.total });
+  } else if (msg.type === 'progress') {
+    setState({ phase: 'details', done: msg.done, total: msg.total });
   } else if (msg.type === 'complete') {
     setState({
       status: 'complete',
+      phase: null,
       results: msg.results,
       done: msg.count,
       total: msg.count,
     });
+    saveHistoryEntry(msg.count, state.goal, msg.results);
   } else if (msg.type === 'error') {
     setState({ status: 'error', error: msg.message });
   }

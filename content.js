@@ -77,30 +77,39 @@ class OlxScraper {
     }
   }
 
-  // ── Coleta cards de múltiplas páginas ───────────────────
+  // ── Coleta cards de múltiplas páginas (até atingir objetivo) ──
   static async #collectCards(config) {
     const allCards = [];
 
-    // Página 1: DOM atual
-    const page1 = this.#parseCards();
-    allCards.push(...page1);
-    console.log(`[OLX Scraper] Página 1: ${page1.length} cards`);
+    // Página 1: DOM atual (sempre carregado no SPA)
+    const pageCards = this.#parseCards();
+    allCards.push(...pageCards);
+    this.#sendCollectProgress(allCards.length, config.goal);
+    console.log(`[OLX Scraper] Página 1: ${pageCards.length} cards (total ${allCards.length}/${this.#goalLabel(config.goal)})`);
 
-    // Páginas 2+
-    for (let p = 2; p <= config.pages; p++) {
+    // Páginas 2+ até atingir goal ou esgotar resultados
+    let p = 2;
+    while (config.goal === Infinity || allCards.length < config.goal) {
       const url = this.#buildPageUrl(p + config.offset);
+      let cards;
       try {
         const html = await this.#fetchWithTimeout(url, config.timeout);
-        const cards = this.#parseCardsFromHtml(html);
-        allCards.push(...cards);
-        console.log(`[OLX Scraper] Página ${p}: ${cards.length} cards`);
+        cards = this.#parseCardsFromHtml(html);
       } catch (err) {
         console.warn(`[OLX Scraper] Página ${p} falhou: ${err.message}`);
-        break;
+        break; // erro de rede: resultado parcial já é válido
       }
+      if (!cards.length) {
+        console.log(`[OLX Scraper] Página ${p} vazia — fim dos resultados.`);
+        break; // fim natural da busca
+      }
+      allCards.push(...cards);
+      this.#sendCollectProgress(allCards.length, config.goal);
+      console.log(`[OLX Scraper] Página ${p}: ${cards.length} cards (total ${allCards.length}/${this.#goalLabel(config.goal)})`);
+      p++;
     }
 
-    return allCards;
+    return config.goal < Infinity ? allCards.slice(0, config.goal) : allCards;
   }
 
   // ── Extrai dados do anúncio (página de detalhes) ───────
@@ -224,16 +233,26 @@ class OlxScraper {
     chrome.runtime.sendMessage({ type: 'progress', done, total });
   }
 
+  // ── Envio de progresso da fase de coleta ───────────────
+  static #sendCollectProgress(found, goal) {
+    // total = goal fixo quando finito; = found (barra "cheia") quando ilimitado
+    const total = goal === Infinity ? found : goal;
+    chrome.runtime.sendMessage({ type: 'collectprogress', done: found, total });
+  }
+
+  static #goalLabel(goal) {
+    return goal === Infinity ? 'ilimitado' : goal;
+  }
+
   // ── Help ────────────────────────────────────────────────
   static help() {
     console.log(`OLX Scraper v${this.version}
 Uso:
-  OlxScraper.extract({ pages: 10, minimal: true, batchSize: 5 })
+  OlxScraper.extract({ goal: 1500, minimal: true, batchSize: 5 })
 
 Opções:
-  pages     Número de páginas da grid (default 30)
+  goal      Número alvo de anúncios (default ilimitado)
   offset    Offset inicial (default 0)
-  limit     Máximo de anúncios (default ilimitado)
   minimal   Apenas campos principais (default true)
   timeout   Timeout por requisição ms (default 15000)
   batchSize Lote de detalhes simultâneos (default 5)`);
@@ -242,15 +261,14 @@ Opções:
   // ── Extract principal ──────────────────────────────────
   static async extract(options = {}) {
     const config = {
-      pages: options.pages ?? 30,
+      goal: options.goal ?? Infinity,
       offset: options.offset ?? 0,
-      limit: options.limit ?? Infinity,
       minimal: options.minimal ?? true,
       timeout: options.timeout ?? 15000,
       batchSize: options.batchSize ?? 5,
     };
 
-    console.log(`[OLX Scraper] Iniciando extração — páginas: ${config.pages}, limite: ${config.limit > 1e8 ? 'ilimitado' : config.limit}, minimal: ${config.minimal}`);
+    console.log(`[OLX Scraper] Iniciando extração — objetivo: ${this.#goalLabel(config.goal)}, minimal: ${config.minimal}`);
 
     // 0. Aguardar os cards renderizarem (OLX é SPA)
     const waited = await this.#waitForCards(config.timeout);
@@ -264,18 +282,12 @@ Opções:
       return [];
     }
 
-    // 2. Aplicar limit
-    const limited = config.limit < Infinity ? cards.slice(0, config.limit) : cards;
-
-    console.log(`[OLX Scraper] Total cards coletados: ${limited.length}`);
-
-    // 3. Buscar detalhes
-    const results = await this.#fetchDetails(limited, config);
+    // 2. Buscar detalhes (cards já cortados em goal no #collectCards)
+    const results = await this.#fetchDetails(cards, config);
 
     console.log(`[OLX Scraper] Extração concluída — ${results.length} anúncios`);
 
-    // Aplicar limit novamente (já foi aplicado, mas por segurança)
-    return results.slice(0, config.limit);
+    return results;
   }
 }
 

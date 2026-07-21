@@ -35,7 +35,7 @@ const btnCopy = $('btn-copy');
 const btnNew = $('btn-new');
 
 // ── Save / Load settings ─────────────────────────────────
-const SETTINGS_KEYS = ['pages', 'offset', 'limit', 'minimal', 'batchSize', 'timeout'];
+const SETTINGS_KEYS = ['goal', 'offset', 'minimal', 'batchSize', 'timeout'];
 
 function loadSettings() {
   chrome.storage.sync.get(SETTINGS_KEYS, (saved) => {
@@ -69,14 +69,12 @@ SETTINGS_KEYS.forEach(key => {
 
 // ── Validate form ────────────────────────────────────────
 function validateForm() {
-  const pages = parseInt($('pages').value);
+  const goal = parseInt($('goal').value);
   const batchSize = parseInt($('batchSize').value);
   const timeout = parseInt($('timeout').value);
 
-  if (!pages || pages < 1) { showFormError('Páginas deve ser ≥ 1'); return false; }
-  if (pages > 100) { showFormError('Máximo de 100 páginas'); return false; }
+  if (goal && goal < 1) { showFormError('Objetivo deve ser ≥ 1'); return false; }
   if (!batchSize || batchSize < 1) { showFormError('Lote deve ser ≥ 1'); return false; }
-  if (batchSize > 20) { showFormError('Lote máximo é 20'); return false; }
   if (!timeout || timeout < 1000) { showFormError('Timeout mínimo é 1000ms'); return false; }
   if (timeout > 120000) { showFormError('Timeout máximo é 120000ms'); return false; }
 
@@ -152,6 +150,7 @@ function connectPort() {
         // Background envia results completos quando completa (ou ao reconectar).
         lastResults = msg.results;
         showComplete(msg.count);
+        loadHistory();
         break;
       case 'stateSnapshot':
         // Popup pediu snapshot completo (ex: após reconectar para download).
@@ -160,6 +159,9 @@ function connectPort() {
           showComplete(msg.state.results.length);
         }
         syncUIFromState(msg.state);
+        break;
+      case 'historyList':
+        renderHistory(msg.list);
         break;
       case 'error':
         onError(msg.message);
@@ -173,10 +175,10 @@ function connectPort() {
 function syncUIFromState(s) {
   if (!s) return;
   if (s.status === 'scraping') {
-    updateProgress(s.done, s.total);
+    updateProgress(s.done, s.total, s.phase);
     setUIState(STATE.SCRAPING);
   } else if (s.status === 'complete') {
-    if (s.done) updateProgress(s.done, s.total || s.done);
+    if (s.done) updateProgress(s.done, s.total || s.done, s.phase);
     // results não vêm no update; se já temos lastResults, mostra.
     if (lastResults) showComplete(lastResults.length);
     else setUIState(STATE.COMPLETE);
@@ -192,10 +194,18 @@ function startScraping(options) {
 }
 
 // ── Progress ─────────────────────────────────────────────
-function updateProgress(done, total) {
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+function updateProgress(done, total, phase) {
+  // clamp evita barra >100% quando coleta estoura goal antes do cutoff
+  const pct = total > 0 ? Math.round((Math.min(done, total) / total) * 100) : 0;
   progressBar.style.width = `${pct}%`;
   progressCount.textContent = `${done} / ${total}`;
+
+  const label = document.querySelector('.progress-text');
+  if (label) {
+    label.textContent = phase === 'collect'
+      ? 'Coletando anúncios...'
+      : 'Buscando detalhes...';
+  }
 }
 
 // ── Complete ─────────────────────────────────────────────
@@ -261,9 +271,8 @@ form.addEventListener('submit', (e) => {
   if (!validateForm()) return;
 
   const options = {
-    pages: parseInt($('pages').value),
+    goal: parseInt($('goal').value) || Infinity,
     offset: parseInt($('offset').value) || 0,
-    limit: parseInt($('limit').value) || Infinity,
     minimal: $('minimal').checked,
     batchSize: parseInt($('batchSize').value),
     timeout: parseInt($('timeout').value),
@@ -283,12 +292,69 @@ btnNew.addEventListener('click', () => {
 btnDownload.addEventListener('click', downloadResults);
 btnCopy.addEventListener('click', copyResults);
 
+// ── Histórico ────────────────────────────────────────────
+function loadHistory() {
+  if (!port) connectPort();
+  port.postMessage({ type: 'getHistory' });
+}
+
+function renderHistory(list) {
+  const el = $('history-list');
+  if (!list.length) {
+    el.innerHTML = '<p class="history-empty">Nenhuma extração ainda.</p>';
+    return;
+  }
+  el.innerHTML = list.map(h => {
+    const d = new Date(h.ts);
+    const label = `${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
+    const goalTxt = h.goal !== Infinity ? `<span class="hi-goal">objetivo ${h.goal}</span>` : '';
+    return `
+      <div class="history-item" data-id="${escapeHtml(h.id)}">
+        <div class="hi-head">
+          <span class="hi-meta">${escapeHtml(label)}</span>
+          <button class="hi-del" data-id="${escapeHtml(h.id)}" data-act="del" title="Remover">✕</button>
+        </div>
+        <span class="hi-count">${h.count} anúncio${h.count !== 1 ? 's' : ''}</span>${goalTxt}
+        <div class="hi-actions">
+          <button class="btn-secondary" data-id="${escapeHtml(h.id)}" data-act="open">Abrir</button>
+          <button class="btn-secondary" data-id="${escapeHtml(h.id)}" data-act="dl">Baixar</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function openHistoryItem(id) {
+  if (!port) connectPort();
+  const list = await new Promise(res =>
+    chrome.storage.local.get('olxHistory', d => res(d.olxHistory || [])));
+  const item = list.find(e => e.id === id);
+  if (!item || !item.results) return;
+  lastResults = item.results;
+  showComplete(item.results.length);
+}
+
+// Delegação de cliques no histórico (Abrir / Baixar / Remover)
+$('history-list').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-act]');
+  if (!btn) return;
+  const id = btn.dataset.id;
+  const act = btn.dataset.act;
+  if (act === 'del') {
+    if (port) port.postMessage({ type: 'deleteHistory', id });
+  } else if (act === 'open') {
+    openHistoryItem(id);
+  } else if (act === 'dl') {
+    openHistoryItem(id).then(() => downloadResults());
+  }
+});
+
 // ── Init ─────────────────────────────────────────────────
 (async function init() {
   loadSettings();
   // Conecta ao background PRIMEIRO, para receber o estado atual do
   // scraping (pode estar rodando em background mesmo com popup fechado).
   connectPort();
+  loadHistory();
   const onOlx = await checkIsOlx();
   if (onOlx) setUIState(STATE.IDLE);
 })();
